@@ -20,6 +20,7 @@ impl BouwnceReputationContract {
         }
 
         admin.require_auth();
+        operator.require_auth();
 
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Operator, &operator);
@@ -40,20 +41,21 @@ impl BouwnceReputationContract {
             panic_with_error!(&env, ContractError::InvalidScore);
         }
 
+        // nonce replay protection
         if env.storage().persistent().has(&DataKey::UsedNonce(nonce.clone())) {
             panic_with_error!(&env, ContractError::NonceUsed);
         }
-
         env.storage().persistent().set(&DataKey::UsedNonce(nonce.clone()), &true);
 
+        // duplicate review per user-vendor
         let user_vendor_key = DataKey::UserReview(user_id.clone(), vendor_id.clone());
 
         if env.storage().persistent().has(&user_vendor_key) {
             panic_with_error!(&env, ContractError::DuplicateReview);
         }
-
         env.storage().persistent().set(&user_vendor_key, &true);
 
+        // unique review hash
         if env.storage().persistent().has(&DataKey::Review(review_hash.clone())) {
             panic_with_error!(&env, ContractError::ReviewAlreadyExists);
         }
@@ -69,21 +71,24 @@ impl BouwnceReputationContract {
 
         env.storage().persistent().set(&DataKey::Review(review_hash.clone()), &review);
 
-        let mut vendor: VendorProfile = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Vendor(vendor_id.clone()))
-            .unwrap_or(VendorProfile {
-                total_interactions: 0,
-                reputation_score: 0,
-                verified_reviews: 0,
-                disputed_reviews: 0,
-                badge_level: Symbol::new(&env, "NEW"),
-            });
+        let mut vendor: VendorProfile = match
+            env.storage().persistent().get(&DataKey::Vendor(vendor_id.clone()))
+        {
+            Some(v) => v,
+            None =>
+                VendorProfile {
+                    total_interactions: 0,
+                    reputation_score: 0,
+                    verified_reviews: 0,
+                    disputed_reviews: 0,
+                    badge_level: Symbol::new(&env, "NEW"),
+                },
+        };
 
-        vendor.total_interactions += 1;
-        vendor.reputation_score += score;
-        vendor.verified_reviews += 1;
+        vendor.total_interactions = vendor.total_interactions.saturating_add(1);
+        vendor.reputation_score = vendor.reputation_score.saturating_add(score);
+        vendor.verified_reviews = vendor.verified_reviews.saturating_add(1);
+
         vendor.badge_level = Self::calculate_badge(&env, vendor.total_interactions);
 
         env.storage().persistent().set(&DataKey::Vendor(vendor_id.clone()), &vendor);
@@ -92,27 +97,28 @@ impl BouwnceReputationContract {
     }
 
     pub fn get_vendor(env: Env, vendor_id: Symbol) -> VendorProfile {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Vendor(vendor_id))
-            .unwrap_or_else(|| panic_with_error!(&env, ContractError::VendorNotFound))
+        match env.storage().persistent().get(&DataKey::Vendor(vendor_id)) {
+            Some(v) => v,
+            None => panic_with_error!(&env, ContractError::VendorNotFound),
+        }
     }
 
     pub fn get_review(env: Env, review_hash: BytesN<32>) -> InteractionProof {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Review(review_hash))
-            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ReviewNotFound))
+        match env.storage().persistent().get(&DataKey::Review(review_hash)) {
+            Some(r) => r,
+            None => panic_with_error!(&env, ContractError::ReviewNotFound),
+        }
     }
 
     pub fn dispute_review(env: Env, admin: Address, review_hash: BytesN<32>) {
         Self::require_admin(&env, &admin);
 
-        let mut review: InteractionProof = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Review(review_hash.clone()))
-            .unwrap_or_else(|| panic_with_error!(&env, ContractError::ReviewNotFound));
+        let mut review: InteractionProof = match
+            env.storage().persistent().get(&DataKey::Review(review_hash.clone()))
+        {
+            Some(r) => r,
+            None => panic_with_error!(&env, ContractError::ReviewNotFound),
+        };
 
         if review.disputed {
             panic_with_error!(&env, ContractError::ReviewAlreadyDisputed);
@@ -130,7 +136,10 @@ impl BouwnceReputationContract {
 
         new_admin.require_auth();
 
-        let old_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let old_admin: Address = match env.storage().instance().get(&DataKey::Admin) {
+            Some(a) => a,
+            None => panic_with_error!(&env, ContractError::Uninitialized),
+        };
 
         env.storage().instance().set(&DataKey::Admin, &new_admin);
 
@@ -146,17 +155,26 @@ impl BouwnceReputationContract {
     }
 
     pub fn get_admin(env: Env) -> Address {
-        env.storage().instance().get(&DataKey::Admin).unwrap()
+        match env.storage().instance().get(&DataKey::Admin) {
+            Some(a) => a,
+            None => panic_with_error!(&env, ContractError::Uninitialized),
+        }
     }
 
     pub fn get_operator(env: Env) -> Address {
-        env.storage().instance().get(&DataKey::Operator).unwrap()
+        match env.storage().instance().get(&DataKey::Operator) {
+            Some(o) => o,
+            None => panic_with_error!(&env, ContractError::Uninitialized),
+        }
     }
 
     fn require_admin(env: &Env, caller: &Address) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let admin: Address = match env.storage().instance().get(&DataKey::Admin) {
+            Some(a) => a,
+            None => panic_with_error!(env, ContractError::Uninitialized),
+        };
 
-        if admin != *caller {
+        if &admin != caller {
             panic_with_error!(env, ContractError::Unauthorized);
         }
 
@@ -164,9 +182,12 @@ impl BouwnceReputationContract {
     }
 
     fn require_operator(env: &Env, caller: &Address) {
-        let operator: Address = env.storage().instance().get(&DataKey::Operator).unwrap();
+        let operator: Address = match env.storage().instance().get(&DataKey::Operator) {
+            Some(o) => o,
+            None => panic_with_error!(env, ContractError::Uninitialized),
+        };
 
-        if operator != *caller {
+        if &operator != caller {
             panic_with_error!(env, ContractError::Unauthorized);
         }
 
