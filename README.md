@@ -179,7 +179,7 @@ This system is designed as a **controlled trust architecture**:
 
 This balances performance, usability, and integrity during early-stage deployment.
 
-## Use Cases (Bouwnce Ecosystem Only)
+## Use Cases (Bouwnce Ecosystem)
 
 - Vendor rating within Bouwnce platform
 - Service quality tracking
